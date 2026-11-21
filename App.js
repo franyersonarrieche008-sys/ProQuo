@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { StatusBar } from 'expo-status-bar';
 import {
   Pressable,
@@ -14,7 +14,7 @@ import { productosIniciales } from './data/productos';
 
 const brand = {
   name: 'ProQuo',
-  slogan: 'Tu marketplace para elegir mejor cada día',
+  slogan: 'Calidad que encuentras, confianza que te acompaña',
 };
 
 const categoriaOptions = [
@@ -77,6 +77,7 @@ export default function App() {
   const [selectedCategory, setSelectedCategory] = useState('Todas');
   const [sortOrder, setSortOrder] = useState('asc');
   const [selectedProductId, setSelectedProductId] = useState(null);
+  const [selectedOrderId, setSelectedOrderId] = useState(null);
   const [statusMessage, setStatusMessage] = useState('');
   const [couponInput, setCouponInput] = useState('');
   const [couponApplied, setCouponApplied] = useState(false);
@@ -84,24 +85,26 @@ export default function App() {
   const [editingProductId, setEditingProductId] = useState(null);
   const [reviewDraft, setReviewDraft] = useState({ rating: 5, comment: '' });
   const [hasLoaded, setHasLoaded] = useState(false);
+  const orderSequence = useRef(0);
 
   useEffect(() => {
     const loadStoredState = async () => {
       try {
-        const raw = await AsyncStorage.getItem('proquo-state');
-        if (!raw) {
-          setHasLoaded(true);
-          return;
-        }
-
-        const parsed = JSON.parse(raw);
-        if (parsed.products && parsed.products.length) setProducts(parsed.products);
-        if (parsed.favorites) setFavorites(parsed.favorites);
-        if (parsed.cart) setCart(parsed.cart);
-        if (parsed.history) setHistory(parsed.history);
-        if (parsed.buyerForm) setBuyerForm(parsed.buyerForm);
+        await AsyncStorage.removeItem('proquo-state');
+        setProducts(getInitialCatalog());
+        setFavorites([]);
+        setCart([]);
+        setHistory([]);
+        setBuyerForm(emptyBuyerForm);
+        setSelectedProductId(null);
+        setSelectedOrderId(null);
+        setCouponInput('');
+        setCouponApplied(false);
+        setSellerForm(emptySellerForm);
+        setEditingProductId(null);
+        setReviewDraft({ rating: 5, comment: '' });
       } catch (error) {
-        console.log('No se pudo cargar el estado local', error);
+        console.log('No se pudo restablecer el estado local', error);
       } finally {
         setHasLoaded(true);
       }
@@ -243,6 +246,17 @@ export default function App() {
     });
   };
 
+  const removeCartItem = (productId) => {
+    const product = products.find((item) => item.id === productId);
+
+    setCart((prev) => prev.filter((item) => item.productId !== productId));
+    setStatusMessage(
+      product
+        ? `${product.nombre} eliminado del carrito.`
+        : 'Producto eliminado del carrito.',
+    );
+  };
+
   const handleConfirmPurchase = () => {
     if (!cart.length) {
       setStatusMessage('Tu carrito está vacío.');
@@ -268,7 +282,8 @@ export default function App() {
       }
     }
 
-    const orderId = `PED-${Math.floor(1000 + Math.random() * 9000)}`;
+    orderSequence.current += 1;
+    const orderId = `PED-${1000 + orderSequence.current}`;
     const order = {
       id: orderId,
       createdAt: new Date().toISOString(),
@@ -679,6 +694,14 @@ export default function App() {
                     <Text style={styles.qtyButtonText}>+</Text>
                   </Pressable>
                 </View>
+                <Pressable
+                  onPress={() => removeCartItem(item.productId)}
+                  style={styles.removeButton}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Eliminar ${product.nombre} del carrito`}
+                >
+                  <Text style={styles.removeButtonText}>Eliminar</Text>
+                </Pressable>
               </View>
             );
           })}
@@ -745,31 +768,108 @@ export default function App() {
     </View>
   );
 
-  const renderHistory = () => (
-    <View style={styles.sectionContainer}>
-      <Text style={styles.sectionTitle}>Historial</Text>
-      {history.length === 0 ? (
-        <View style={styles.emptyBox}>
-          <Text style={styles.emptyTitle}>No hay pedidos registrados</Text>
-          <Text style={styles.emptyText}>Cuando confirmes una compra, aparecerá aquí.</Text>
-        </View>
-      ) : (
-        history.map((order) => (
-          <View key={order.id} style={styles.historyCard}>
-            <Text style={styles.productName}>{order.id}</Text>
-            <Text style={styles.productMeta}>{new Date(order.createdAt).toLocaleString('es-CO')}</Text>
-            <Text style={styles.productPrice}>{formatCOP(order.total)}</Text>
-            <Text style={styles.reviewText}>Cliente: {order.buyer.name}</Text>
-            {order.items.map((item) => (
-              <Text key={`${order.id}-${item.productId}`} style={styles.reviewText}>
-                {item.nombre} x {item.quantity}
-              </Text>
+  const renderHistory = () => {
+    const selectedOrder =
+      history.find((order) => order.id === selectedOrderId) || null;
+
+    if (selectedOrder) {
+      return (
+        <View style={styles.sectionContainer}>
+          <Pressable
+            onPress={() => setSelectedOrderId(null)}
+            style={styles.backButton}
+          >
+            <Text style={styles.backButtonText}>Volver al historial</Text>
+          </Pressable>
+
+          <Text style={styles.sectionTitle}>Detalle del pedido</Text>
+          <View style={styles.detailCard}>
+            <Text style={styles.productName}>{selectedOrder.id}</Text>
+            <Text style={styles.productMeta}>
+              {new Date(selectedOrder.createdAt).toLocaleString('es-CO')}
+            </Text>
+            <Text style={styles.reviewText}>
+              Cliente: {selectedOrder.buyer?.name || 'No registrado'}
+            </Text>
+
+            <Text style={[styles.productName, styles.orderDetailTitle]}>
+              Artículos
+            </Text>
+            {selectedOrder.items.map((item) => (
+              <View
+                key={`${selectedOrder.id}-${item.productId}`}
+                style={styles.orderItemRow}
+              >
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.productName}>{item.nombre}</Text>
+                  <Text style={styles.reviewText}>
+                    Cantidad: {item.quantity}
+                  </Text>
+                </View>
+                <View style={styles.orderItemPrice}>
+                  <Text style={styles.reviewText}>Precio unitario</Text>
+                  <Text style={styles.productPrice}>
+                    {formatCOP(item.unitPrice)}
+                  </Text>
+                </View>
+              </View>
             ))}
+
+            <View style={styles.summaryBox}>
+              <Text style={styles.summaryLine}>
+                Subtotal: {formatCOP(selectedOrder.subtotal || 0)}
+              </Text>
+              <Text style={styles.summaryLine}>
+                Envío:{' '}
+                {!selectedOrder.shipping
+                  ? 'Gratis'
+                  : formatCOP(selectedOrder.shipping)}
+              </Text>
+              {selectedOrder.discount > 0 && (
+                <Text style={styles.summaryLine}>
+                  Descuento: {formatCOP(selectedOrder.discount)}
+                </Text>
+              )}
+              <Text style={[styles.summaryLine, styles.totalLine]}>
+                Total registrado: {formatCOP(selectedOrder.total)}
+              </Text>
+            </View>
           </View>
-        ))
-      )}
-    </View>
-  );
+        </View>
+      );
+    }
+
+    return (
+      <View style={styles.sectionContainer}>
+        <Text style={styles.sectionTitle}>Historial</Text>
+        {history.length === 0 ? (
+          <View style={styles.emptyBox}>
+            <Text style={styles.emptyTitle}>No hay pedidos registrados</Text>
+            <Text style={styles.emptyText}>Cuando confirmes una compra, aparecerá aquí.</Text>
+          </View>
+        ) : (
+          history.map((order) => (
+            <View key={order.id} style={styles.historyCard}>
+              <Text style={styles.productName}>{order.id}</Text>
+              <Text style={styles.productMeta}>
+                {new Date(order.createdAt).toLocaleString('es-CO')}
+              </Text>
+              <Text style={styles.productPrice}>{formatCOP(order.total)}</Text>
+              <Text style={styles.reviewText}>Cliente: {order.buyer?.name || 'No registrado'}</Text>
+              <Pressable
+                onPress={() => setSelectedOrderId(order.id)}
+                style={styles.primaryButton}
+                accessibilityRole="button"
+                accessibilityLabel={`Ver detalle del pedido ${order.id}`}
+              >
+                <Text style={styles.primaryButtonText}>Ver detalle</Text>
+              </Pressable>
+            </View>
+          ))
+        )}
+      </View>
+    );
+  };
 
   const renderSeller = () => (
     <View style={styles.sectionContainer}>
@@ -892,7 +992,10 @@ export default function App() {
           ].map((tab) => (
             <Pressable
               key={tab.id}
-              onPress={() => setSection(tab.id)}
+              onPress={() => {
+                setSection(tab.id);
+                if (tab.id !== 'history') setSelectedOrderId(null);
+              }}
               style={[styles.tabButton, section === tab.id && styles.tabButtonActive]}
             >
               <Text style={[styles.tabText, section === tab.id && styles.tabTextActive]}>{tab.label}</Text>
@@ -1240,6 +1343,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    gap: 10,
   },
   quantityBox: {
     flexDirection: 'row',
@@ -1256,6 +1360,17 @@ const styles = StyleSheet.create({
   },
   qtyButtonText: {
     color: '#F8FAFC',
+    fontWeight: '800',
+  },
+  removeButton: {
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#DC2626',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  removeButtonText: {
+    color: '#DC2626',
     fontWeight: '800',
   },
   qtyText: {
@@ -1304,6 +1419,19 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     padding: 14,
     marginBottom: 12,
+  },
+  orderDetailTitle: {
+    marginTop: 16,
+  },
+  orderItemRow: {
+    flexDirection: 'row',
+    gap: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E2E8F0',
+    paddingVertical: 12,
+  },
+  orderItemPrice: {
+    alignItems: 'flex-end',
   },
   disabledButton: {
     backgroundColor: '#94A3B8',
