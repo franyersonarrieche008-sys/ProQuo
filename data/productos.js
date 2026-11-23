@@ -4,10 +4,14 @@ export const productosIniciales = [
     id: 'PROD-001',
     nombre: 'Audífonos Inalámbricos TWS',
     categoria: 'Tecnología',
+    marca: 'NovaSound',
     precio: 75000,
-    stock: 10,
     descripcion: 'Audífonos Bluetooth con estuche de carga y gran autonomía.',
-    iniciales: 'AI'
+    iniciales: 'AI',
+    variantes: [
+      { id: 'PROD-001-NEGRO', etiqueta: 'Negro', precio: 75000, stock: 6 },
+      { id: 'PROD-001-BLANCO', etiqueta: 'Blanco', precio: 79000, stock: 4 }
+    ]
   },
   {
     id: 'PROD-002',
@@ -22,10 +26,14 @@ export const productosIniciales = [
     id: 'PROD-003',
     nombre: 'Cargador Carga Rápida USB-C',
     categoria: 'Tecnología',
+    marca: 'Voltix',
     precio: 35000,
-    stock: 0, // Agotado para pruebas
     descripcion: 'Adaptador de pared de 20W con puerto USB tipo C.',
-    iniciales: 'CR'
+    iniciales: 'CR',
+    variantes: [
+      { id: 'PROD-003-20W', etiqueta: '20W', precio: 35000, stock: 0 },
+      { id: 'PROD-003-30W', etiqueta: '30W', precio: 42000, stock: 0 }
+    ]
   },
 
   // Categoría: Hogar
@@ -62,10 +70,15 @@ export const productosIniciales = [
     id: 'PROD-007',
     nombre: 'Camiseta Básica Oversize',
     categoria: 'Moda',
+    marca: 'UrbanThread',
     precio: 50000,
-    stock: 15,
     descripcion: 'Camiseta 100% algodón de corte moderno y cómodo.',
-    iniciales: 'CO'
+    iniciales: 'CO',
+    variantes: [
+      { id: 'PROD-007-S-BLANCA', etiqueta: 'S / Blanca', precio: 50000, stock: 5 },
+      { id: 'PROD-007-M-NEGRA', etiqueta: 'M / Negra', precio: 52000, stock: 6 },
+      { id: 'PROD-007-L-NEGRA', etiqueta: 'L / Negra', precio: 54000, stock: 4 }
+    ]
   },
   {
     id: 'PROD-008',
