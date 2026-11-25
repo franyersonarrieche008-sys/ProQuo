@@ -1,6 +1,6 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { StatusBar } from 'expo-status-bar';
-import { Alert, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { productosIniciales } from './data/productos';
 
 const COP = (value) => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(value);
@@ -44,6 +44,7 @@ export default function App() {
   const [selectedVariantId, setSelectedVariantId] = useState(null);
   const [detailQuantity, setDetailQuantity] = useState(1);
   const [selectedOrderId, setSelectedOrderId] = useState(null);
+  const [cancelConfirmOrderId, setCancelConfirmOrderId] = useState(null);
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState('Todas');
   const [brand, setBrand] = useState('Todas');
@@ -103,21 +104,58 @@ export default function App() {
     if (!variant) return;
     if (variant.stock === 0) { setStatus('La variante seleccionada está agotada.'); return; }
     if (!Number.isInteger(quantity) || quantity < 1) { setStatus('La cantidad debe ser válida.'); return; }
+    const existing = cart.find((item) => item.productId === productId && item.variantId === variantId);
+    const current = existing?.quantity || 0;
+    if (current + quantity > variant.stock) {
+      setStatus(`Máximo permitido: ${variant.stock} unidades.`);
+      return;
+    }
     setCart((prev) => {
       const existing = prev.find((item) => item.productId === productId && item.variantId === variantId);
-      const current = existing?.quantity || 0;
-      if (current + quantity > variant.stock) { setStatus(`Máximo permitido: ${variant.stock} unidades.`); return prev; }
       if (existing) return prev.map((item) => item === existing ? { ...item, quantity: item.quantity + quantity } : item);
       return [...prev, { productId, variantId, variantLabel: variant.etiqueta, quantity, unitPrice: variant.precio }];
     });
     setStatus(`${product.nombre} — ${variant.etiqueta} agregado al carrito.`);
   };
 
-  const updateQuantity = (productId, variantId, delta) => setCart((prev) => prev.map((item) => item.productId === productId && item.variantId === variantId
-    ? { ...item, quantity: item.quantity + delta } : item).filter((item) => item.quantity > 0).map((item) => {
-      const stock = getVariant(item.productId, item.variantId)?.stock || 0;
-      return item.quantity > stock ? { ...item, quantity: stock } : item;
-    }));
+  const updateQuantity = (productId, variantId, delta) => {
+    const item = cart.find((entry) => entry.productId === productId && entry.variantId === variantId);
+    if (!item) return;
+    const stock = getVariant(productId, variantId)?.stock || 0;
+    if (delta > 0 && item.quantity >= stock) {
+      setStatus(`Máximo permitido: ${stock} unidades.`);
+      return;
+    }
+    setCart((prev) => prev.map((entry) => entry.productId === productId && entry.variantId === variantId
+      ? { ...entry, quantity: entry.quantity + delta } : entry).filter((entry) => entry.quantity > 0));
+    setStatus('');
+  };
+
+  const adjustDetailQuantity = (delta) => {
+    if (!selectedVariantId) {
+      setStatus('Selecciona una variante antes de cambiar la cantidad.');
+      return;
+    }
+    if (delta < 0) {
+      setDetailQuantity((current) => Math.max(1, current - 1));
+      setStatus('');
+      return;
+    }
+    const variant = getVariant(selectedProduct.id, selectedVariantId);
+    if (!variant) return;
+    if (variant.stock === 0) {
+      setStatus('La variante seleccionada está agotada.');
+      return;
+    }
+    const existing = cart.find((item) => item.productId === selectedProduct.id && item.variantId === selectedVariantId);
+    const remaining = variant.stock - (existing?.quantity || 0);
+    if (detailQuantity >= remaining) {
+      setStatus(`Máximo permitido: ${variant.stock} unidades.`);
+      return;
+    }
+    setDetailQuantity((current) => current + 1);
+    setStatus('');
+  };
 
   const confirmPurchase = () => {
     if (!cart.length) { setStatus('Tu carrito está vacío.'); return; }
@@ -175,26 +213,37 @@ export default function App() {
     const order = orders.find((item) => item.id === orderId);
     if (!order) return;
     if (!['Confirmado', 'Preparando'].includes(order.state)) { setStatus('No se puede cancelar: el pedido ya fue despachado o entregado.'); return; }
-    Alert.alert('Cancelar pedido', `¿Confirmas cancelar ${orderId}?`, [
-      { text: 'Volver', style: 'cancel' },
-      { text: 'Sí, cancelar', style: 'destructive', onPress: () => {
-        setOrders((prev) => prev.map((item) => item.id !== orderId ? item : {
-          ...item, state: 'Cancelado', stockRestored: true,
-          stateHistory: [...item.stateHistory, { state: 'Cancelado', date: now() }],
-        }));
-        setProducts((prev) => prev.map((product) => {
-          const items = order.items.filter((item) => item.productId === product.id);
-          if (!items.length || order.stockRestored) return product;
-          const variants = product.variants.map((variant) => {
-            const item = items.find((entry) => entry.variantId === variant.id);
-            return item ? { ...variant, stock: variant.stock + item.quantity } : variant;
-          });
-          return { ...product, variants };
-        }));
-        setNotifications((prev) => [{ id: `NOT-${Date.now()}-${orderId}`, type: 'pedido', message: `${orderId}: pedido Cancelado`, date: now(), read: false, reference: orderId }, ...prev]);
-        setStatus(`${orderId} cancelado y stock reintegrado.`);
-      } },
-    ]);
+    setCancelConfirmOrderId(orderId);
+    setStatus(`Confirma la cancelación de ${orderId}.`);
+  };
+
+  const confirmCancelOrder = (orderId) => {
+    const order = orders.find((item) => item.id === orderId);
+    if (!order) {
+      setCancelConfirmOrderId(null);
+      return;
+    }
+    if (!['Confirmado', 'Preparando'].includes(order.state)) {
+      setCancelConfirmOrderId(null);
+      setStatus('No se puede cancelar: el pedido ya fue despachado o entregado.');
+      return;
+    }
+    setOrders((prev) => prev.map((item) => item.id !== orderId ? item : {
+      ...item, state: 'Cancelado', stockRestored: true,
+      stateHistory: [...item.stateHistory, { state: 'Cancelado', date: now() }],
+    }));
+    setProducts((prev) => prev.map((product) => {
+      const items = order.items.filter((item) => item.productId === product.id);
+      if (!items.length || order.stockRestored) return product;
+      const variants = product.variants.map((variant) => {
+        const item = items.find((entry) => entry.variantId === variant.id);
+        return item ? { ...variant, stock: variant.stock + item.quantity } : variant;
+      });
+      return { ...product, variants };
+    }));
+    setNotifications((prev) => [{ id: `NOT-${Date.now()}-${orderId}`, type: 'pedido', message: `${orderId}: pedido Cancelado`, date: now(), read: false, reference: orderId }, ...prev]);
+    setCancelConfirmOrderId(null);
+    setStatus(`${orderId} cancelado y stock reintegrado.`);
   };
 
   const saveAddress = () => {
@@ -247,27 +296,62 @@ export default function App() {
 
   const toggleSubscription = (productId, variantId) => {
     const exists = subscriptions.find((item) => item.productId === productId && item.variantId === variantId);
+    const product = products.find((item) => item.id === productId);
+    const variant = product?.variants.find((item) => item.id === variantId);
+    const article = `${product?.nombre || 'Producto'} — ${variant?.etiqueta || 'Variante'}`;
     if (exists?.active) {
       setSubscriptions((prev) => prev.map((item) => item.id === exists.id ? { ...item, active: false } : item));
       setStatus('Suscripción cancelada.');
     } else if (exists) {
       setSubscriptions((prev) => prev.map((item) => item.id === exists.id ? { ...item, active: true } : item));
+      setNotifications((prev) => [{
+        id: `NOT-${Date.now()}-${exists.id}`,
+        type: 'suscripcion',
+        message: `Suscripción activada: ${article}. Te avisaremos cuando haya stock.`,
+        date: now(),
+        read: false,
+        reference: `${productId}/${variantId}`,
+      }, ...prev]);
       setStatus('Suscripción reactivada.');
     } else {
-      setSubscriptions((prev) => [...prev, { id: `SUB-${Date.now()}`, productId, variantId, active: true }]);
+      const subscriptionId = `SUB-${Date.now()}`;
+      setSubscriptions((prev) => [...prev, { id: subscriptionId, productId, variantId, active: true }]);
+      setNotifications((prev) => [{
+        id: `NOT-${Date.now()}-${subscriptionId}`,
+        type: 'suscripcion',
+        message: `Suscripción activada: ${article}. Te avisaremos cuando haya stock.`,
+        date: now(),
+        read: false,
+        reference: `${productId}/${variantId}`,
+      }, ...prev]);
       setStatus('Te avisaremos cuando haya stock.');
     }
   };
 
   const restock = (productId, variantId) => {
+    const product = products.find((item) => item.id === productId);
+    const variant = product?.variants.find((item) => item.id === variantId);
+    const article = `${product?.nombre || 'Producto'} — ${variant?.etiqueta || 'Variante'}`;
+    const newStock = (variant?.stock || 0) + 5;
+    const activeSubscriptions = subscriptions.filter((item) =>
+      item.productId === productId &&
+      item.variantId === variantId &&
+      item.active
+    );
     setProducts((prev) => prev.map((product) => product.id === productId ? {
       ...product,
       variants: product.variants.map((variant) => variant.id === variantId ? { ...variant, stock: variant.stock + 5 } : variant),
     } : product));
-    setNotifications((prev) => subscriptions
-      .filter((item) => item.productId === productId && item.variantId === variantId && item.active)
-      .map((item) => ({ id: `NOT-${Date.now()}-${item.id}`, type: 'reposicion', message: 'Hay reposición disponible para el artículo suscrito.', date: now(), read: false, reference: `${productId}/${variantId}` }))
-      .concat(prev));
+    if (activeSubscriptions.length > 0) {
+      setNotifications((prev) => activeSubscriptions.map((item) => ({
+        id: `NOT-${Date.now()}-${item.id}-RESTOCK`,
+        type: 'reposicion',
+        message: `Hay reposición disponible: ${article}. Stock actualizado: ${newStock} unidades.`,
+        date: now(),
+        read: false,
+        reference: `${productId}/${variantId}`,
+      })).concat(prev));
+    }
     setSubscriptions((prev) => prev.map((item) => item.productId === productId && item.variantId === variantId ? { ...item, active: false } : item));
     setStatus('Reposición simulada completada.');
   };
@@ -335,13 +419,13 @@ export default function App() {
         <Text style={styles.meta}>{selectedVariantId ? `Disponibles: ${getVariant(selectedProduct.id, selectedVariantId)?.stock || 0}` : `Stock global: ${getStock(selectedProduct)}`}</Text>
         <Text style={styles.description}>{selectedProduct.descripcion}</Text>
         <Text style={styles.title}>Elige una variante</Text>
-        {selectedProduct.variants.map((variant) => <Pressable key={variant.id} onPress={() => setSelectedVariantId(variant.id)} disabled={variant.stock === 0} style={[styles.variant, selectedVariantId === variant.id && styles.variantActive, variant.stock === 0 && styles.disabled]}>
+        {selectedProduct.variants.map((variant) => <Pressable key={variant.id} onPress={() => { setSelectedVariantId(variant.id); setDetailQuantity(1); setStatus(''); }} style={[styles.variant, selectedVariantId === variant.id && styles.variantActive, variant.stock === 0 && styles.outOfStock]}>
           <Text style={styles.variantText}>{variant.etiqueta} · {COP(variant.precio)} · {variant.stock} und.</Text>
         </Pressable>)}
         <View style={styles.row}>
-          <Pressable onPress={() => setDetailQuantity(Math.max(1, detailQuantity - 1))} style={styles.qty}><Text style={styles.qtyText}>−</Text></Pressable>
+          <Pressable onPress={() => adjustDetailQuantity(-1)} style={styles.qty}><Text style={styles.qtyText}>−</Text></Pressable>
           <Text style={styles.qtyNumber}>{detailQuantity}</Text>
-          <Pressable onPress={() => setDetailQuantity(detailQuantity + 1)} style={styles.qty}><Text style={styles.qtyText}>+</Text></Pressable>
+          <Pressable onPress={() => adjustDetailQuantity(1)} style={styles.qty}><Text style={styles.qtyText}>+</Text></Pressable>
         </View>
         <Pressable onPress={() => addToCart(selectedProduct.id)} style={styles.primary}><Text style={styles.primaryText}>Agregar al carrito</Text></Pressable>
         <Pressable onPress={() => restock(selectedProduct.id, selectedVariantId || selectedProduct.variants[0].id)} style={[styles.secondary, { marginTop: 8 }]}><Text style={styles.secondaryText}>Simular reposición (demostración)</Text></Pressable>
@@ -440,6 +524,16 @@ export default function App() {
         <Text style={styles.total}>Total registrado: {COP(order.total)}</Text>
         {['Confirmado', 'Preparando', 'En camino'].includes(order.state) && <Pressable onPress={() => advanceOrder(order.id)} style={styles.primary}><Text style={styles.primaryText}>Simular avance de entrega</Text></Pressable>}
         {['Confirmado', 'Preparando'].includes(order.state) && <Pressable onPress={() => cancelOrder(order.id)} style={[styles.remove, { marginTop: 8 }]}><Text style={styles.removeText}>Cancelar compra</Text></Pressable>}
+        {cancelConfirmOrderId === order.id && (
+          <View style={[styles.panel, { marginTop: 8 }]}>
+            <Text style={styles.cardTitle}>¿Confirmas cancelar el pedido?</Text>
+            <Text style={styles.meta}>El stock reservado será reintegrado.</Text>
+            <View style={styles.row}>
+              <Pressable onPress={() => { setCancelConfirmOrderId(null); setStatus('Cancelación anulada.'); }} style={styles.secondary}><Text style={styles.secondaryText}>Volver</Text></Pressable>
+              <Pressable onPress={() => confirmCancelOrder(order.id)} style={styles.remove}><Text style={styles.removeText}>Sí, cancelar</Text></Pressable>
+            </View>
+          </View>
+        )}
         {['En camino', 'Entregado', 'Cancelado'].includes(order.state) && <Text style={styles.meta}>{order.state === 'Cancelado' ? 'Pedido cancelado: no admite nuevas acciones.' : 'Cancelación no disponible en esta etapa.'}</Text>}
       </View>
     </View>;
@@ -507,7 +601,7 @@ export default function App() {
       <StatusBar style="light" />
       <View style={styles.container}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.tabs} contentContainerStyle={styles.tabsContent}>
-          {[['catalog','Catálogo'],['compare','Comparar'],['favorites','Favoritos'],['cart','Carrito'],['addresses','Direcciones'],['orders','Pedidos'],['notifications','Avisos'],['help','Ayuda']].map(([id,label]) => <Pressable key={id} onPress={() => { setSection(id); if (id !== 'orders') setSelectedOrderId(null); }} style={[styles.tab, section === id && styles.tabActive]}><Text style={styles.tabText}>{label}</Text></Pressable>)}
+          {[['catalog','Catálogo'],['compare','Comparar'],['favorites','Favoritos'],['cart','Carrito'],['addresses','Direcciones'],['orders','Pedidos'],['notifications','Avisos'],['help','Ayuda']].map(([id,label]) => <Pressable key={id} onPress={() => { setSection(id); setCancelConfirmOrderId(null); if (id !== 'orders') setSelectedOrderId(null); }} style={[styles.tab, section === id && styles.tabActive]}><Text style={styles.tabText}>{label}</Text></Pressable>)}
         </ScrollView>
         <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">{renderSection()}</ScrollView>
         {!!status && <Text style={styles.status}>{status}</Text>}
@@ -550,7 +644,7 @@ const styles = StyleSheet.create({
   variant: { backgroundColor: '#E2E8F0', borderRadius: 10, padding: 12, marginVertical: 4 },
   variantActive: { backgroundColor: '#22C55E' },
   variantText: { color: '#0F172A', fontWeight: '700' },
-  disabled: { opacity: 0.45 },
+  outOfStock: { opacity: 0.72, borderWidth: 1, borderColor: '#94A3B8' },
   qty: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#0F172A', borderWidth: 2, borderColor: '#334155', alignItems: 'center', justifyContent: 'center' },
   qtyText: { color: '#F8FAFC', fontSize: 22, lineHeight: 24, fontWeight: '900' },
   qtyNumber: { color: '#0F172A', fontWeight: '800', minWidth: 30, textAlign: 'center' },
